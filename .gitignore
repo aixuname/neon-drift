@@ -1,0 +1,28 @@
+# Player names, local rankings, settings and crash logs stay on this computer.
+/data/
+/temp/
+/previews/
+/tools/archive/
+
+# Generated Python files and local environments.
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+
+# Local credentials and editor state.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+*.log
+
+# Windows shortcuts depend on the local installation path.
+*.lnk

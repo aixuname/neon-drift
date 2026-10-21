@@ -1,0 +1,15 @@
+* text=auto
+*.py text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.bat text eol=crlf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.wav binary
+*.ttc binary
+*.ttf binary
+*.dll binary
+*.pyd binary
+*.exe binary
+*.zip binary

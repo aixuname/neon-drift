@@ -9,9 +9,9 @@ HIT_Z=3.0
 SHIP_RADIUS=.040
 MAX_LIVES=3
 MODES={
-    'easy': {'name':'漫游','tag':'快速热身','speed':15.,'interval':1.00,'gap':.75,'blocks':2,'fire':1.10,'bullets':.58,'invuln':.90},
-    'normal': {'name':'疾驰','tag':'高速交锋','speed':20.,'interval':.72,'gap':.63,'blocks':3,'fire':.95,'bullets':.75,'invuln':.72},
-    'hard': {'name':'极限','tag':'进阶挑战','speed':25.,'interval':.53,'gap':.54,'blocks':4,'fire':.72,'bullets':.92,'invuln':.56},
+    'easy': {'name':'漫游','tag':'快速热身','speed':15.,'interval':1.00,'gap':.75,'blocks':2,'fire':1.40,'bullets':.50,'invuln':.90},
+    'normal': {'name':'疾驰','tag':'高速交锋','speed':20.,'interval':.72,'gap':.63,'blocks':3,'fire':1.20,'bullets':.64,'invuln':.72},
+    'hard': {'name':'极限','tag':'进阶挑战','speed':25.,'interval':.53,'gap':.54,'blocks':4,'fire':.95,'bullets':.80,'invuln':.56},
 }
 SPECIALS={
     'brute':('重装冲锋','',4.5), 'swarm':('奶龙集群','',4.6),
@@ -204,7 +204,7 @@ class Encounter:
     age:float=0.
     spawned:int=0
     shots:int=0
-    fire_at:float=.45
+    fire_at:float=.75
     actors:list=field(default_factory=list)
     meteors:list=field(default_factory=list)
     auxiliary:bool=False
@@ -293,7 +293,7 @@ class Round:
         # A private configuration keeps the selected leaderboard difficulty
         # and future rounds unchanged.
         self.config=dict(MODES['hard'],speed=entry_speed,interval=.40,gap=.50,
-                         fire=.56,bullets=1.08,invuln=.55)
+                         fire=.78,bullets=.94,invuln=.55)
         self.waves.clear()
         self.bullets.clear()
         self.actors.clear()
@@ -410,7 +410,7 @@ class Round:
         mode=self.attack_mode
         pattern=e.shots%3
         ports=(-1,1) if pattern!=2 else ((-1,) if e.shots%2==0 else (1,))
-        cap={'easy':60,'normal':90,'hard':120}[mode]
+        cap={'easy':40,'normal':60,'hard':80}[mode]
         for port in ports:
             x,y=cx+port*.25,cy+port*.045
             if pattern==0:
@@ -418,15 +418,15 @@ class Round:
                 if mode=='easy':
                     offsets=(-.62,.62)
                 elif mode=='normal':
-                    offsets=(-.72,-.36,.36,.72)
+                    offsets=(-.55,.55)
                 else:
-                    offsets=(-.90,-.60,-.30,.30,.60,.90)
+                    offsets=(-.82,-.40,.40,.82)
                 angles=[aimed+offset for offset in offsets]
             elif pattern==1:
-                offsets=(-.48,.48) if mode=='easy' else ((-.52,0,.52) if mode=='normal' else (-.8,-.4,0,.4,.8))
+                offsets=(0.,) if mode=='easy' else ((-.48,.48) if mode=='normal' else (-.6,0.,.6))
                 angles=[math.pi/2+offset for offset in offsets]
             else:
-                count={'easy':6,'normal':8,'hard':10}[mode]
+                count={'easy':5,'normal':6,'hard':8}[mode]
                 angles=[j*math.tau/count+e.shots*.31+port*.12 for j in range(count)]
             for angle in angles:
                 if len(self.bullets)<cap:

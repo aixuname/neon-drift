@@ -438,7 +438,7 @@ class DragonAndBulletRules(unittest.TestCase):
         game=empty()
         game.invulnerable=10
         game.begin_special('gunner')
-        game.update(2.6)
+        game.update(3.4)
         event=game.encounters[0]
         self.assertEqual(event.shots,3)
         self.assertGreater(len(game.bullets),0)
@@ -447,7 +447,7 @@ class DragonAndBulletRules(unittest.TestCase):
         self.assertTrue(any(b.vx>0 for b in game.bullets))
 
     def test_three_bursts_have_reduced_counts_and_no_aimed_center_shot(self):
-        for mode,counts in [('easy',(4,4,6)),('normal',(8,6,8)),('hard',(12,10,10))]:
+        for mode,counts in [('easy',(4,2,5)),('normal',(4,4,6)),('hard',(8,6,8))]:
             game=empty(mode)
             game.begin_special('gunner')
             event=game.encounters[0]
@@ -461,6 +461,33 @@ class DragonAndBulletRules(unittest.TestCase):
                         fired=math.atan2(bullet.vy,bullet.vx)
                         difference=abs((fired-aimed+math.pi)%math.tau-math.pi)
                         self.assertGreater(difference,.29)
+
+    def test_gunner_attack_has_opening_grace_and_fewer_bursts(self):
+        for mode,expected in [('easy',4),('normal',4),('hard',5)]:
+            game=empty(mode)
+            game.invulnerable=10
+            game.begin_special('gunner')
+            event=game.encounters[0]
+            game.update(.70)
+            self.assertEqual(event.shots,0)
+            game.update(.10)
+            self.assertEqual(event.shots,1)
+            game.update(4.30)
+            self.assertEqual(event.shots,expected,(mode,event.shots))
+            self.assertLessEqual(len(game.bullets),80)
+
+    def test_hidden_gunner_is_nerfed_but_stronger_than_regular_hard(self):
+        game=empty()
+        game.invulnerable=100
+        game.update(30)
+        self.assertLess(game.config['fire'],MODES['hard']['fire'])
+        self.assertGreater(game.config['bullets'],MODES['hard']['bullets'])
+        game.update(.70)
+        event=next(e for e in game.encounters if e.kind=='gunner')
+        self.assertEqual(event.shots,0)
+        game.update(5)
+        self.assertEqual(event.shots,6)
+        self.assertLessEqual(len(game.bullets),80)
 
     def test_grazing_bullet_is_safe_but_hull_contact_hits(self):
         game=empty()

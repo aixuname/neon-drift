@@ -3,6 +3,7 @@
 /temp/
 /previews/
 /tools/archive/
+/dist/
 
 # Generated Python files and local environments.
 __pycache__/

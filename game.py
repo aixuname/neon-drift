@@ -23,6 +23,7 @@ os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
 os.environ['SDL_IME_SHOW_UI'] = '1'
 sys.dont_write_bytecode = True
 import pygame
+from flight_rewards import flight_summary
 from combat_render import CombatEffects, enemy_sprite
 from combat import (Actor, Block, Bullet, Encounter, HIT_Z, MAX_LIVES, Meteor, MODES, PATTERNS,
                     HIDDEN_SECONDS, ROUND_SECONDS, Round, SHIP_RADIUS, SPECIALS, Wave)
@@ -129,6 +130,7 @@ class Storage:
         record['surprises']=len(game.special_history)
         record['hidden_unlocked']=game.hidden_unlocked
         record['hidden_completed']=game.hidden_completed
+        record.update(flight_summary(self.records,game,name))
         self.write('scores.json', self.records+[record])
         self.records.append(record)
         self.settings['last_name'] = record['name']
@@ -144,21 +146,30 @@ class Audio:
         self.muted = muted
         self.enabled = bool(pygame.mixer.get_init())
         self.sounds = {}
+        self.music_mode='normal'
+        self.music_mix=0.
+        self.music_paused=False
+        self.tracks={}
         if not self.enabled:
             return
-        for name in ('click', 'collect', 'hit', 'shield', 'pass', 'finish', 'tick', 'event', 'warning','shot'):
+        pygame.mixer.set_num_channels(16)
+        pygame.mixer.set_reserved(2)
+        for name in ('click', 'collect', 'hit', 'shield', 'pass', 'finish', 'tick', 'event', 'warning','shot','armor_break'):
             path = ROOT/'assets'/'sounds'/(name+'.wav')
             if path.exists():
                 self.sounds[name] = pygame.mixer.Sound(str(path))
-        music = ROOT/'assets'/'sounds'/'neon_loop.wav'
-        if music.exists():
-            pygame.mixer.music.load(str(music))
-            pygame.mixer.music.play(-1)
+        for index,(mode,filename) in enumerate((('normal','neon_loop.wav'),('hidden','hidden_loop.wav'))):
+            path=ROOT/'assets'/'sounds'/filename
+            if path.exists():
+                self.tracks[mode]=pygame.mixer.Sound(str(path))
+                pygame.mixer.Channel(index).play(self.tracks[mode],loops=-1)
         self.apply()
 
     def apply(self):
         if self.enabled:
-            pygame.mixer.music.set_volume(0 if self.muted else .28)
+            master=0 if self.muted else .28
+            pygame.mixer.Channel(0).set_volume(master*(1-self.music_mix))
+            pygame.mixer.Channel(1).set_volume(master*self.music_mix)
             for name, sound in self.sounds.items():
                 sound.set_volume(0 if self.muted else (.13 if name=='shot' else (.25 if name in ('hit', 'pass') else .42)))
 
@@ -171,11 +182,30 @@ class Audio:
         self.apply()
 
     def pause(self, paused):
+        self.music_paused=paused
         if self.enabled:
-            if paused:
-                pygame.mixer.music.pause()
-            else:
-                pygame.mixer.music.unpause()
+            for index in (0,1):
+                channel=pygame.mixer.Channel(index)
+                channel.pause() if paused else channel.unpause()
+
+    def set_music(self,mode):
+        if mode==self.music_mode:
+            return
+        self.music_mode=mode
+        if self.enabled and mode in self.tracks:
+            channel=pygame.mixer.Channel(1 if mode=='hidden' else 0)
+            channel.play(self.tracks[mode],loops=-1)
+            if self.music_paused:
+                channel.pause()
+
+    def update(self,dt):
+        if self.music_paused:
+            return
+        target=1. if self.music_mode=='hidden' else 0.
+        if self.music_mix!=target:
+            change=min(abs(target-self.music_mix),dt/.65)
+            self.music_mix+=change if target>self.music_mix else -change
+            self.apply()
 
 
 
@@ -223,9 +253,7 @@ class Scene(CombatEffects):
 
 
 
-    def ship(self,x,y,shield=False,blink=False,bank=0,gold=False):
-        if blink:
-            return
+    def ship(self,x,y,shield=False,blink=False,bank=0,gold=False,overdrive=False):
         px,py=self.project(x,y,HIT_Z)
         def point(dx,dy):
             return (px+dx*SHIP_DRAW_SCALE,py+dy*SHIP_DRAW_SCALE)
@@ -233,13 +261,17 @@ class Scene(CombatEffects):
         wobble=math.sin(self.t*17)*2
         pts=[point(0,-25),point(12,-1),point(36,17+bank),point(11,12),
              point(0,23),point(-11,12),point(-36,17-bank),point(-12,-1)]
+        if blink:
+            self.line((159,234,255),pts,2,True,.55)
+            self.line(WHITE,[point(0,-18),point(0,13)],2,power=.3)
+            return
         pygame.draw.polygon(self.surface,(23,43,68),pts)
         self.line(self.accent,pts,2,True,.55)
         pygame.draw.polygon(self.surface,(174,210,225),[point(0,-25),point(8,7),point(0,15),point(-8,7)])
         self.line(WHITE,[point(0,-25),point(0,8)],2,power=.3)
-        engine_color=GOLD if gold else self.accent
+        engine_color=(104,221,255) if overdrive else (GOLD if gold else self.accent)
         for dx in (-14,14):
-            length=64 if gold else 40
+            length=64 if gold else (58 if overdrive else 40)
             engine=[point(dx-4,13),point(dx+4,13),point(dx,length+wobble)]
             pygame.draw.polygon(self.surface,tint(engine_color,.65),engine)
             self.line(engine_color,[point(dx,15),point(dx,length*.8+wobble)],2,power=.85)
@@ -253,8 +285,20 @@ class Scene(CombatEffects):
         points=[(x+math.cos(i*math.tau/48)*rx,y+math.sin(i*math.tau/48)*ry) for i in range(48)]
         self.line(color,points,width,True,.48)
 
+    def draw_rift(self,game):
+        age=game.elapsed-ROUND_SECONDS
+        if age<0 or age>1.4:
+            return
+        fade=1-age/1.4
+        spread=28+age*360
+        for side in (-1,1):
+            points=[(640+side*(spread+math.sin(i*2.3)*20),125+i*95) for i in range(8)]
+            self.line(tint((137,182,255),fade),points,4,power=.65)
+            self.line(tint(WHITE,fade),points,1,power=.5)
+        self.ring((640,430),60+age*480,38+age*290,tint((127,197,255),fade),2)
 
-    def draw(self,surface,game,t,menu=False,particles=()):
+
+    def draw(self,surface,game,t,menu=False,particles=(),shards=()):
         self.surface=surface
         self.mascot_overlays=[]
         self.t=t
@@ -271,6 +315,8 @@ class Scene(CombatEffects):
         self.secondary=blend(PALETTES[prev][1],PALETTES[phase][1],phase_t)
         surface.blit(self.backgrounds[phase],(0,0))
         self.glow.fill((0,0,0))
+        if game.hidden_unlocked and not menu:
+            self.draw_rift(game)
         # Faceted tunnel walls provide depth beneath the luminous guide rails.
         for index in range(27,0,-1):
             near=index*3-self.distance%3
@@ -326,17 +372,27 @@ class Scene(CombatEffects):
                     self.line(tint(color,min(1,life*3)),[(px,py),(px-vx*.03,py-vy*.03)],2,power=.65)
             self.ship(game.x,game.y,game.shield>0,
                       game.invulnerable>0 and int(t*15)%2==0,
-                      bank=max(-6,min(6,(game.target[0]-game.x)*15)),gold=game.gold_trail>0)
+                      bank=max(-6,min(6,(game.target[0]-game.x)*15)),gold=game.gold_trail>0,overdrive=game.hidden_unlocked)
         glow=pygame.transform.smoothscale(self.glow,(W,H))
         surface.blit(glow,(0,0),special_flags=pygame.BLEND_RGB_ADD)
         # Compose the textured character after bloom so the tunnel's glow
         # cannot shine through its face, glasses and opaque fur.
         for image,position in self.mascot_overlays:
             surface.blit(image,position)
+        if not menu:
+            self.draw_actor_details(game)
         if self.mascot_overlays and not menu:
             self.ship(game.x,game.y,game.shield>0,
                       game.invulnerable>0 and int(t*15)%2==0,
-                      bank=max(-6,min(6,(game.target[0]-game.x)*15)),gold=game.gold_trail>0)
+                      bank=max(-6,min(6,(game.target[0]-game.x)*15)),gold=game.gold_trail>0,overdrive=game.hidden_unlocked)
+        if not menu:
+            for x,y,life,vx,vy,angle,spin in shards:
+                size=3+life*7
+                points=[(x+math.cos(angle+i*math.tau/3)*size,
+                         y+math.sin(angle+i*math.tau/3)*size*.65) for i in range(3)]
+                pygame.draw.polygon(surface,(96,183,218),points)
+                pygame.draw.aalines(surface,WHITE,True,points)
+            self.draw_projectiles(game)
         # A quiet edge treatment keeps the center bright and the UI readable.
         pygame.draw.line(surface,(22,40,60),(28,114),(W-28,114),1)
 
@@ -373,6 +429,7 @@ class App:
         self.countdown=3.
         self.last_tick=31
         self.particles=[]
+        self.shards=[]
         self.messages=[]
         self.shake=self.flash=0.
         self.toast=''
@@ -403,11 +460,13 @@ class App:
         self.saved_record=None
         self.last_tick=31
         self.particles.clear()
+        self.shards.clear()
         self.messages.clear()
         self.shake=self.flash=0.
         self.scene_time=0.
         self.composition=''
         self.audio.pause(False)
+        self.audio.set_music('normal')
         self.audio.play('tick')
         pygame.key.stop_text_input()
         self.save_settings()
@@ -436,6 +495,7 @@ class App:
     def menu(self):
         self.state='menu'
         self.audio.pause(False)
+        self.audio.set_music('normal')
         pygame.key.stop_text_input()
 
     def leaderboard(self):
@@ -553,9 +613,15 @@ class App:
                     speed=random.uniform(80,250)
                     self.particles.append([px,py,random.uniform(.35,.8),color,math.cos(angle)*speed,math.sin(angle)*speed])
             if kind=='hit':
-                self.shake=.28
-                self.flash=.22
-                self.audio.play('hit')
+                self.shake=.20
+                self.flash=.14
+                self.audio.play('armor_break')
+                for i in range(10):
+                    angle=i*math.tau/10+random.uniform(-.15,.15)
+                    speed=random.uniform(90,220)
+                    self.shards.append([px,py,random.uniform(.35,.65),
+                                        math.cos(angle)*speed,math.sin(angle)*speed,
+                                        angle,random.uniform(-8,8)])
             elif kind in ('shield','blocked'):
                 self.audio.play('shield')
             elif kind=='collect':
@@ -566,7 +632,11 @@ class App:
                 pass
             elif kind=='hidden_start':
                 self.audio.play('warning')
+                self.audio.set_music('hidden')
                 self.last_tick=math.ceil(HIDDEN_SECONDS)
+            elif kind=='finale_start':
+                self.audio.play('event')
+                self.shake=max(self.shake,.08)
             elif kind=='shot':
                 self.audio.play('shot')
             elif kind=='meteor_impact':
@@ -613,11 +683,19 @@ class App:
                 particle[1]+=particle[5]*dt
                 if particle[2]<=0:
                     self.particles.remove(particle)
+            for shard in self.shards[:]:
+                shard[2]-=dt
+                shard[0]+=shard[3]*dt
+                shard[1]+=shard[4]*dt
+                shard[5]+=shard[6]*dt
+                if shard[2]<=0:
+                    self.shards.remove(shard)
             for message in self.messages[:]:
                 message[2]-=dt*25
                 message[3]-=dt
                 if message[3]<=0:
                     self.messages.remove(message)
+        self.audio.update(dt)
 
     def glass(self,rect,border=(35,55,80)):
         rounded(self.canvas,(10,19,35),rect,18)
@@ -678,7 +756,8 @@ class App:
         text(s,'得分',(48,150),12,MUTED)
         text(s,f'{self.game.score:05}',(47,171),29,WHITE,True)
         self.glass((231,137,154,82))
-        text(s,'隐藏关 · 时间' if self.game.hidden_unlocked else '时间',(249,150),12,GOLD if self.game.hidden_unlocked else MUTED)
+        clock_label='终极回旋 · 时间' if self.game.finale_started else ('隐藏关 · 时间' if self.game.hidden_unlocked else '时间')
+        text(s,clock_label,(249,150),12,GOLD if self.game.hidden_unlocked else MUTED)
         text(s,f'{self.game.remaining:04.1f}',(247,171),29,RED if self.game.remaining<=5 else CYAN,True)
         self.glass((1063,137,185,82))
         text(s,'装甲',(1082,151),12,MUTED)
@@ -728,14 +807,36 @@ class App:
         self.glass((328,111,624,616),(45,82,105))
         text(s,'F L I G H T   R E C O R D',(640,150),12,CYAN,True,True)
         text(s,self.game.reason or '穿越完成',(640,204),34,WHITE,True,True)
-        text(s,f'{self.game.score:05}',(640,283),70,CYAN,True,True)
+        summary=self.saved_record if self.saved and self.saved_record else flight_summary(self.storage.records,self.game,self.name)
+        grade=summary.get('grade','B')
+        grade_color=GOLD if grade=='S' else CYAN
+        pygame.draw.circle(s,(20,35,52),(422,265),47)
+        pygame.draw.circle(s,grade_color,(422,265),47,2)
+        text(s,grade,(422,262),58,grade_color,True,True)
+        text(s,'航行评级',(422,318),12,MUTED,center=True)
+        text(s,f'{self.game.score:05}',(660,273),62,CYAN,True,True)
         detail=MODES[self.game.mode]['name']+f'  ·  航行 {self.game.elapsed:.1f} 秒  ·  彩蛋 {len(self.game.special_history)} 次'
         if self.game.hidden_unlocked:
             detail+='  ·  隐藏航线'
-        text(s,detail,(640,352),16,MUTED,center=True)
+        text(s,detail,(664,333),14,MUTED,center=True)
         for x,value,label in [(447,str(self.game.orbs),'收集能量'),(640,str(self.game.dodges),'成功穿越'),(833,str(self.game.best_chain),'最高连收')]:
-            text(s,value,(x,400),24,WHITE,True,True)
-            text(s,label,(x,435),12,MUTED,center=True)
+            text(s,value,(x,360),24,WHITE,True,True)
+            text(s,label,(x,386),12,MUTED,center=True)
+        badges=summary.get('achievements',[])
+        if badges:
+            columns=2 if len(badges)>3 else len(badges)
+            width=534//columns
+            start=640-columns*width/2
+            for i,label in enumerate(badges):
+                row,col=divmod(i,columns)
+                height=22 if len(badges)>3 else 27
+                y=400+row*25 if len(badges)>3 else 406
+                rect=pygame.Rect(start+col*width+3,y,width-6,height)
+                rounded(s,(34,39,49),rect,8)
+                fitted(s,label,(rect.x+9,rect.y+4),rect.width-18,13,GOLD,True)
+        else:
+            text(s,'S 隐藏关通关  ·  A 完成普通航线  ·  B 继续挑战',(640,418),12,MUTED,center=True)
+        text(s,summary.get('comparison',''),(640,462 if len(badges)>3 else 451),13,CYAN,center=True)
         field_rect=pygame.Rect(389,477,502,55)
         rounded(s,(8,15,29),field_rect,12)
         rounded(s,(41,89,106) if self.saved else CYAN,field_rect,12,1)
@@ -787,7 +888,7 @@ class App:
 
     def draw(self):
         self.buttons=[]
-        self.scene.draw(self.canvas,self.game,self.scene_time,self.state=='menu',self.particles)
+        self.scene.draw(self.canvas,self.game,self.scene_time,self.state=='menu',self.particles,self.shards)
         if self.flash>0:
             layer=pygame.Surface((W,H),pygame.SRCALPHA)
             layer.fill((255,60,88,int(self.flash/.22*60)))

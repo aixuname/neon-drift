@@ -85,8 +85,32 @@ def effect(name,duration,notes=None,noise_amount=0,sweep=None):
     write(name,data)
 
 
+def hidden_music():
+    """A distinct 150 BPM arpeggio/bass loop for the overdrive route."""
+    duration=12.8
+    samples=[]
+    notes=(60,67,72,75,58,65,70,74,56,63,68,72,58,65,70,77)
+    noise=random.Random(512)
+    for i in range(round(RATE*duration)):
+        t=i/RATE
+        step=int(t/.2)
+        age=t%.2
+        midi=notes[step%len(notes)]
+        f=440*2**((midi-69)/12)
+        arp=(math.sin(math.tau*f*age)+.25*math.sin(math.tau*f*2*age))*math.exp(-age*17)*.13
+        bassf=440*2**((notes[(step//8)*4%len(notes)]-24-69)/12)
+        bass=math.sin(math.tau*bassf*t)*math.exp(-(t%.4)*8)*.17
+        beat=t%.4
+        kick=math.sin(math.tau*(48*beat+1.5*(1-math.exp(-beat*45))))*math.exp(-beat*28)*.24
+        hat=noise.uniform(-1,1)*math.exp(-(t%.2)*95)*.025
+        envelope=min(1,t/.005)*min(1,(duration-t)/.005)
+        samples.append((arp+bass+kick+hat)*envelope)
+    write('hidden_loop',samples)
+
+
 if __name__=='__main__':
     music()
+    hidden_music()
     effect('click',.08,sweep=(780,490))
     effect('collect',.24,notes=[79,86])
     effect('hit',.35,sweep=(140,42),noise_amount=.65)
@@ -97,4 +121,5 @@ if __name__=='__main__':
     effect('event',.45,notes=[72,76,79,84])
     effect('warning',.48,notes=[76,64,76])
     effect('shot',.09,sweep=(920,290),noise_amount=.10)
-    print('Original soundtrack and ten sound effects ready.')
+    effect('armor_break',.32,sweep=(420,66),noise_amount=.85)
+    print('Two original soundtracks and eleven sound effects ready.')

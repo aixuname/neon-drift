@@ -17,6 +17,7 @@ os.environ['SDL_VIDEODRIVER']='dummy'
 os.environ['SDL_AUDIODRIVER']='dummy'
 sys.path.insert(0,str(ROOT))
 from game import App, Storage, pygame
+from flight_rewards import flight_grade, flight_summary
 from combat import Actor, Block, Bullet, HIDDEN_SECONDS, HIT_Z, MAX_LIVES, MODES, PATTERNS, ROUND_SECONDS, Round, Wave
 
 
@@ -537,6 +538,97 @@ class DragonAndBulletRules(unittest.TestCase):
             self.assertEqual(len([kind for kind in game.special_history if kind!='rush']),3)
 
 
+class ExperienceRules(unittest.TestCase):
+    def test_finale_replaces_random_attacks_and_has_a_reachable_safe_route(self):
+        game=empty()
+        game.invulnerable=100
+        game.update(39.99)
+        self.assertFalse(game.finale_started)
+        game.update(.01)
+        self.assertTrue(game.finale_started)
+        self.assertEqual(len(game.waves),3)
+        self.assertEqual({w.kind for w in game.waves},{'finale'})
+        self.assertFalse(game.actors or game.bullets or game.encounters or game.special_schedule)
+        for wave in game.waves:
+            for age in (0,.8,1.6,3.0):
+                wave.age=age
+                self.assertFalse(wave.collides(0,0))
+                blade=wave.geometry()[0]
+                self.assertTrue(wave.collides(blade.x,blade.y))
+        game.invulnerable=0
+        game.update(5)
+        self.assertTrue(game.hidden_completed)
+        self.assertEqual(game.lives,3)
+        self.assertEqual(game.elapsed,45)
+        self.assertEqual(sum(e[0]=='finale_start' for e in game.events),1)
+
+    def test_charge_brakes_after_contact_without_rechecking_damage(self):
+        actor=Actor('brute','charge',0,0,2.9,checked=True)
+        previous=actor.z
+        actor.advance(.1)
+        self.assertLess(previous-actor.z,actor.charge_speed*.05)
+        game=empty()
+        game.actors=[actor]
+        game.update(.1)
+        self.assertEqual(game.lives,3)
+
+    def test_gunner_recoil_and_reload_recover_between_shots(self):
+        game=empty()
+        game.begin_special('gunner')
+        game.update(.80)
+        actor=game.actors[0]
+        self.assertGreater(actor.recoil,0)
+        reload=actor.reload_left
+        game.update(.25)
+        self.assertEqual(actor.recoil,0)
+        self.assertLess(actor.reload_left,reload)
+        self.assertGreater(actor.reload_left,0)
+
+    def test_grade_is_based_on_route_completion(self):
+        game=empty()
+        game.elapsed=25
+        game.bonus=99999
+        self.assertEqual(flight_grade(game),'B')
+        game.elapsed=30
+        self.assertEqual(flight_grade(game),'A')
+        game.hidden_unlocked=True
+        game.elapsed=35
+        self.assertEqual(flight_grade(game),'A')
+        game.elapsed=45
+        game.hidden_completed=True
+        self.assertEqual(flight_grade(game),'S')
+
+    def test_personal_record_first_hidden_and_rank_gap_use_the_right_player(self):
+        records=[{'id':'a','mode':'normal','name':'小龙','score':700},
+                 {'id':'b','mode':'normal','name':'阿光','score':900},
+                 {'id':'c','mode':'hard','name':'小龙','score':99999}]
+        game=empty()
+        game.bonus=800
+        game.hidden_unlocked=True
+        game.hidden_completed=True
+        summary=flight_summary(records,game,'小龙')
+        self.assertIn('刷新个人纪录',summary['achievements'])
+        self.assertIn('首次进入隐藏关',summary['achievements'])
+        self.assertEqual(summary['grade'],'S')
+        self.assertEqual(summary['rank_gap'],101)
+        self.assertIn('阿光',summary['comparison'])
+        records[0]['hidden_unlocked']=True
+        game.bonus=700
+        again=flight_summary(records,game,'小龙')
+        self.assertNotIn('首次进入隐藏关',again['achievements'])
+        self.assertNotIn('刷新个人纪录',again['achievements'])
+
+    def test_rank_ties_and_no_name_do_not_claim_a_new_personal_record(self):
+        records=[{'id':'a','mode':'normal','name':'小龙','score':800}]
+        game=empty()
+        game.bonus=800
+        summary=flight_summary(records,game)
+        self.assertFalse(summary['achievements'])
+        self.assertIn('追平',summary['comparison'])
+        game.bonus=900
+        self.assertIn('超越',flight_summary(records,game)['comparison'])
+
+
 class Persistence(unittest.TestCase):
     def setUp(self):
         self.folder=ROOT/'previews'/'test-data'/uuid.uuid4().hex
@@ -567,6 +659,25 @@ class Persistence(unittest.TestCase):
         (self.folder/'scores.json').write_text('{broken',encoding='utf-8')
         self.assertFalse(Storage(self.folder).records)
         self.assertEqual(len(list(self.folder.glob('scores-backup-*.json'))),1)
+
+    def test_legacy_scores_load_and_new_achievements_survive_reload(self):
+        self.storage.write('scores.json',[{'id':'old','mode':'normal','name':'小龙',
+                                          'score':500,'date':'2026-01-01 12:00:00'}])
+        storage=Storage(self.folder)
+        self.assertEqual(len(storage.records),1)
+        game=empty()
+        game.elapsed=45
+        game.bonus=800
+        game.hidden_unlocked=game.hidden_completed=True
+        record=storage.add('小龙',game)
+        self.assertEqual(record['grade'],'S')
+        self.assertIn('首次进入隐藏关',record['achievements'])
+        self.assertIn('刷新个人纪录',record['achievements'])
+        fresh=Storage(self.folder)
+        self.assertEqual(fresh.records[-1]['achievements'],record['achievements'])
+        record2=fresh.add('小龙',game)
+        self.assertNotIn('首次进入隐藏关',record2['achievements'])
+        self.assertNotIn('刷新个人纪录',record2['achievements'])
 
 
 class Interface(unittest.TestCase):
@@ -683,7 +794,7 @@ class Interface(unittest.TestCase):
 
     def test_all_screens_audio_and_resizing(self):
         app=self.app
-        self.assertEqual(len(app.audio.sounds),10)
+        self.assertEqual(len(app.audio.sounds),11)
         self.assertTrue(all(s.get_length()>0 for s in app.audio.sounds.values()))
         for state in ('menu','countdown','playing','paused','result','leaderboard'):
             app.state=state
@@ -692,6 +803,72 @@ class Interface(unittest.TestCase):
         app.screen=pygame.display.set_mode((960,630))
         self.assertEqual(app.pos((480,315)),(640,420))
         app.screen=pygame.display.set_mode((1280,840))
+
+    def test_bullet_rim_draws_in_front_of_the_opaque_dragon(self):
+        app=self.play()
+        app.game.begin_special('gunner')
+        app.game.invulnerable=10
+        app.game.update(.3)
+        actor=app.game.actors[0]
+        factor=(HIT_Z+1)/(actor.z+1)
+        x,y=actor.x*factor,actor.y*factor
+        app.game.bullets=[Bullet(x,y,0,0,age=.2)]
+        app.draw()
+        px,py=app.scene.project(x,y,HIT_Z)
+        self.assertEqual(app.canvas.get_at((round(px)+6,round(py)))[:3],(255,87,126))
+
+    def test_invulnerable_ship_keeps_a_visible_outline_and_hit_shards_pause(self):
+        app=self.play()
+        app.draw()
+        surface=pygame.Surface((1280,840))
+        surface.fill((0,0,0))
+        surface.set_colorkey((0,0,0))
+        app.scene.surface=surface
+        app.scene.ship(0,0,blink=True)
+        self.assertGreater(surface.get_bounding_rect().width,35)
+        app.game.damage(0,0)
+        app.consume_events()
+        self.assertEqual(len(app.shards),10)
+        before=[p[:] for p in app.shards]
+        app.pause()
+        app.update(.3)
+        self.assertEqual(app.shards,before)
+        app.resume()
+        app.update(.1)
+        self.assertNotEqual(app.shards,before)
+        app.draw()
+
+    def test_two_music_tracks_crossfade_pause_mute_and_reset_on_replay(self):
+        app=self.play()
+        audio=app.audio
+        self.assertEqual(set(audio.tracks),{'normal','hidden'})
+        audio.music_mix=0
+        audio.set_music('hidden')
+        audio.update(.25)
+        self.assertGreater(audio.music_mix,0)
+        self.assertLess(audio.music_mix,1)
+        mix=audio.music_mix
+        audio.pause(True)
+        audio.update(1)
+        self.assertEqual(audio.music_mix,mix)
+        audio.pause(False)
+        audio.update(1)
+        self.assertEqual(audio.music_mix,1)
+        old=audio.muted
+        if not old:
+            audio.toggle()
+        self.assertEqual(pygame.mixer.Channel(1).get_volume(),0)
+        if not old:
+            audio.toggle()
+        app.start()
+        app.update(3.01)
+        self.assertEqual(audio.music_mode,'normal')
+        self.assertEqual(audio.music_mix,0)
+
+    def test_trickster_facial_poses_are_distinct(self):
+        from combat_render import enemy_sprite
+        poses=[pygame.image.tobytes(enemy_sprite('trickster',160,False,0,e),'RGBA') for e in range(3)]
+        self.assertEqual(len(set(poses)),3)
 
     def test_four_transparent_character_assets_have_clear_borders(self):
         contents=[]
@@ -751,6 +928,46 @@ def snapshot_and_benchmark():
     app.scene_time=33
     app.draw()
     pygame.image.save(app.canvas,str(ROOT/'previews'/'hidden-playing.png'))
+    app.game=empty()
+    app.game.invulnerable=100
+    app.game.update(40.75)
+    app.game.invulnerable=0
+    app.state='playing'
+    app.scene_time=40.75
+    app.draw()
+    pygame.image.save(app.canvas,str(ROOT/'previews'/'hidden-finale.png'))
+    app.game=empty()
+    app.game.elapsed=15
+    app.game.x,app.game.y=.35,.45
+    app.game.target=(.35,.45)
+    app.game.begin_special('gunner')
+    app.game.invulnerable=100
+    app.game.update(.8)
+    app.game.invulnerable=0
+    app.game.damage(app.game.x,app.game.y)
+    app.consume_events()
+    app.update(.12)
+    app.scene_time=app.game.elapsed
+    app.draw()
+    pygame.image.save(app.canvas,str(ROOT/'previews'/'armor-feedback.png'))
+    app.shards.clear()
+    app.particles.clear()
+    app.flash=app.shake=0
+    app.game=empty()
+    app.game.invulnerable=100
+    app.game.update(45)
+    app.storage=Storage(ROOT/'previews'/'sample-data-v2')
+    app.storage.records=[{'id':'sample-best','mode':'normal','name':'奶龙驾驶员',
+                         'score':app.game.score-450,'date':'2026-01-01 12:00:00'},
+                        {'id':'sample-next','mode':'normal','name':'阿光',
+                         'score':app.game.score+150,'date':'2026-01-01 12:00:00'}]
+    app.name='奶龙驾驶员'
+    app.saved=False
+    app.saved_record=None
+    app.state='result'
+    app.scene_time=45
+    app.draw()
+    pygame.image.save(app.canvas,str(ROOT/'previews'/'result-v2.png'))
     app.game=Round('hard',random.Random(22),events_enabled=False)
     app.game.elapsed=15
     app.game.distance=350

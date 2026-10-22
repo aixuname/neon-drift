@@ -94,6 +94,12 @@ class Wave:
         return (x,y,w,h)
 
     def geometry(self):
+        if self.kind=='finale':
+            angle=self.age*.65+self.phase
+            return [Block(math.cos(angle+i*math.tau/6)*.57,
+                          math.sin(angle+i*math.tau/6)*.57,
+                          .44,.075,angle+i*math.tau/6+math.pi/2,'laser')
+                    for i in range(1,6)]
         if self.kind=='laser':
             angle=self.age*.95+self.phase
             beams=[Block(0,0,1.92,.060,angle,'laser'),
@@ -164,11 +170,16 @@ class Actor:
     radius_y:float=.20
     size:float=.34
     charge_speed:float=32.
+    recoil:float=0.
+    reload_left:float=0.
 
     def advance(self,dt):
         self.age+=dt
+        self.recoil=max(0.,self.recoil-dt*6)
+        self.reload_left=max(0.,self.reload_left-dt)
         if self.motion=='charge':
-            self.z-=self.charge_speed*dt
+            # Decelerate after crossing the player, without a second hit.
+            self.z-=self.charge_speed*(.28 if self.checked else 1.)*dt
         elif self.motion=='cross':
             p=clamp(self.age/self.duration,0,1)
             self.x=self.side*(1.2-2.4*p)
@@ -221,6 +232,7 @@ class Round:
         self.config=MODES[mode]
         self.hidden_unlocked=False
         self.hidden_completed=False
+        self.finale_started=False
         self.rng=rng or random.Random()
         self.elapsed=self.distance=0.
         self.bonus=self.orbs=self.dodges=self.chain=self.best_chain=0
@@ -302,6 +314,19 @@ class Round:
         self.special_schedule=[(ROUND_SECONDS+.60,'gunner'),
                                (ROUND_SECONDS+8.2,self.rng.choice(('brute','swarm','trickster')))]
         self.events.append(('hidden_start',self.x,self.y,''))
+
+    def start_finale(self):
+        self.finale_started=True
+        self.waves.clear()
+        self.bullets.clear()
+        self.actors.clear()
+        self.encounters.clear()
+        self.special_schedule.clear()
+        # Three predictable rotating formations, with open centre and sectors.
+        for i,arrival in enumerate((.9,2.3,3.7)):
+            distance=self.speed*arrival+3/HIDDEN_SECONDS*arrival*arrival
+            self.waves.append(Wave(HIT_Z+distance,kind='finale',phase=i*.45))
+        self.events.append(('finale_start',self.x,self.y,''))
 
     def activate_shield(self):
         if self.ended or self.charge<100 or self.shield>0:
@@ -433,6 +458,8 @@ class Round:
                     self.bullets.append(Bullet(x,y,math.cos(angle)*speed,math.sin(angle)*speed,
                                                color='pink' if pattern==2 else 'orange'))
         e.shots+=1
+        shooter.recoil=1.
+        shooter.reload_left=self.config['fire']
         self.events.append(('shot',cx,cy,''))
 
     def update_events(self,dt):
@@ -554,6 +581,8 @@ class Round:
         if length>.84:
             self.x*=.84/length
             self.y*=.84/length
+        if self.hidden_unlocked and not self.finale_started and self.elapsed>=40-1e-7:
+            self.start_finale()
         self.update_events(dt)
         self.update_actors(dt)
         if self.ended:
@@ -564,7 +593,7 @@ class Round:
         # Keep traffic moving, with fewer waves while enemies or their
         # remaining bullets are active.
         self.spawn_in-=dt
-        if self.spawn_in<=0:
+        if self.spawn_in<=0 and not self.finale_started:
             self.spawn()
             self.spawn_in+=self.config['interval']*(1.65 if self.combat_active else 1.)
         for wave in self.waves[:]:

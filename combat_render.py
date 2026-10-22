@@ -9,8 +9,9 @@ ROOT=Path(__file__).resolve().parent
 RED=(255,92,124)
 GOLD=(255,200,109)
 WHITE=(234,245,255)
-COLORS={'blocks':(255,145,93),'moving':(255,93,139),'laser':(255,119,84),
-        'grid':(179,129,255),'ring':(255,86,149),'mines':(248,113,226)}
+COLORS={'blocks':(255,84,141),'moving':(255,93,139),'laser':(255,86,116),
+        'grid':(179,129,255),'ring':(255,86,149),'mines':(220,104,255),
+        'finale':(255,74,151)}
 
 
 def tint(color,t):
@@ -22,9 +23,18 @@ def source(variant):
     return pygame.image.load(str(ROOT/'assets'/'mascot'/'combat'/(variant+'.png'))).convert_alpha()
 
 
-@lru_cache(maxsize=112)
-def enemy_sprite(variant,size,flip=False,angle=0):
+@lru_cache(maxsize=192)
+def enemy_sprite(variant,size,flip=False,angle=0,expression=0):
     image=pygame.transform.smoothscale(source(variant),(size,size))
+    if variant=='trickster' and expression:
+        # Procedural facial poses are drawn in sprite coordinates, before rotation.
+        if expression==1:
+            pygame.draw.circle(image,(255,224,87),(size*.515,size*.175),max(2,size*.041))
+            pygame.draw.lines(image,(32,47,39),False,[(size*.487,size*.18),
+                              (size*.515,size*.195),(size*.543,size*.18)],max(1,size//90))
+        else:
+            pygame.draw.ellipse(image,(245,110,139),(size*.585,size*.29,size*.065,size*.075))
+            pygame.draw.line(image,(186,70,107),(size*.615,size*.305),(size*.615,size*.35),max(1,size//160))
     if flip:
         image=pygame.transform.flip(image,True,False)
     if angle:
@@ -52,13 +62,13 @@ class CombatEffects:
                 a=i*math.tau/32
                 points.append((px+math.cos(a)*rx*.94,py+math.sin(a)*ry*.30+math.cos(a)*ry*.2))
             self.line(tint(WHITE,.55),points,1,power=.25)
-            self.ring((px,py),max(1,rx*.30),max(1,ry*.30),GOLD,2)
+            self.ring((px,py),max(1,rx*.30),max(1,ry*.30),color,2)
             pygame.draw.ellipse(self.surface,WHITE,(px-rx*.10,py-ry*.10,max(1,rx*.20),max(1,ry*.20)))
             return
         if block.shape in ('laser','grid'):
             self.energy_beam(block,z,color)
             return
-        # Faceted amber crystals: the outline is also used by collision physics.
+        # Faceted ruby crystals: the outline is also used by collision physics.
         front=[self.project(a,b,z) for a,b in block.outline()]
         back=[self.project(a,b,z+.65) for a,b in block.outline()]
         peak=self.project(x-w*.10,y-h*.08,z-.18)
@@ -193,23 +203,29 @@ class CombatEffects:
                         head=self.project(x,y,z)
                         tail=self.project(x+meteor.side*.40,y-.45,z+10)
                         self.line(tint(RED,.8),[tail,head],8,power=.85)
-                        self.line(GOLD,[tail,head],3,power=.7)
+                        self.line(RED,[tail,head],3,power=.7)
                         radius=max(3,88/(z+1))
-                        pygame.draw.circle(self.surface,GOLD,head,radius)
+                        pygame.draw.circle(self.surface,RED,head,radius)
                         pygame.draw.circle(self.surface,WHITE,head,radius*.45)
                     else:
                         fade=max(0,1+until/.35)
                         radius=22-until*220
                         self.ring((tx,ty),radius,radius*.65,tint(RED,fade),2)
+        self.prepare_actors(game)
+
+    def draw_projectiles(self,game):
+        """Draw after character sprites so harmful bullets cannot be hidden."""
         for bullet in game.bullets:
             px,py=self.project(bullet.x,bullet.y,HIT_Z)
             tail=self.project(bullet.x-bullet.vx*.045,bullet.y-bullet.vy*.045,HIT_Z)
-            color=(255,109,190) if bullet.color=='pink' else (255,170,92)
+            color=(239,109,255) if bullet.color=='pink' else (255,87,126)
             self.line(color,[tail,(px,py)],3,power=.50)
             rx=max(3,bullet.radius*475)
             ry=max(2,bullet.radius*285)
+            pygame.draw.ellipse(self.surface,(6,9,21),(px-rx-2,py-ry-2,rx*2+4,ry*2+4))
             pygame.draw.ellipse(self.surface,color,(px-rx,py-ry,rx*2,ry*2))
             pygame.draw.ellipse(self.surface,WHITE,(px-rx*.37,py-ry*.37,rx*.74,ry*.74))
+    def prepare_actors(self,game):
         for actor in sorted(game.actors,key=lambda a:a.z,reverse=True):
             if actor.z<1.1:
                 continue
@@ -219,10 +235,43 @@ class CombatEffects:
                 continue
             flip=actor.side<0 and actor.motion in ('cross','trickster')
             angle=round(math.sin(actor.age*8)*3) if actor.motion!='gunner' else 0
+            expression=0
+            if actor.motion=='gunner':
+                reload_pose=math.sin(math.pi*(1-actor.reload_left/game.config['fire'])) if actor.reload_left else 0
+                angle=round(-actor.recoil*7+math.sin(actor.age*2)*2+reload_pose*5)
+                py+=actor.recoil*5
+            if actor.motion=='charge' and actor.checked:
+                angle=round(actor.side*min(15,actor.age*6))
             if actor.motion=='trickster':
-                angle=round(math.sin(actor.age*9)*6)
-            image=enemy_sprite(actor.variant,size,flip,angle)
+                turning=.72<actor.age<1.07 or 1.74<actor.age<1.96
+                angle=round(math.sin(actor.age*9)*(11 if turning else 6))
+                expression=1 if turning else (2 if int(actor.age*6)%2 else 0)
+            image=enemy_sprite(actor.variant,size,flip,angle,expression)
             if actor.motion=='charge' and actor.checked:
                 image=image.copy()
                 image.set_alpha(round(255*max(0,min(1,(actor.z-1.1)/1.8))))
             self.mascot_overlays.append((image,image.get_rect(center=(px,py))))
+
+    def draw_actor_details(self,game):
+        for actor in game.actors:
+            if actor.motion=='gunner':
+                factor=(HIT_Z+1)/(actor.z+1)
+                for port in (-1,1):
+                    px,py=self.project(actor.x*factor+port*.25,
+                                       actor.y*factor-.05+port*.045,HIT_Z)
+                    if actor.recoil>.2:
+                        r=5+actor.recoil*10
+                        self.line(WHITE,[(px-r,py),(px+r,py)],2,power=.4)
+                        self.line(RED,[(px,py-r*.6),(px,py+r*.6)],2,power=.4)
+                    elif actor.reload_left>0:
+                        progress=1-actor.reload_left/game.config['fire']
+                        arc=[(px+math.cos(i*.25)*9,py+math.sin(i*.25)*6)
+                             for i in range(2,max(3,round(progress*25)))]
+                        self.line((134,181,212),arc,1,power=.15)
+                        offset=math.sin(progress*math.pi)*8
+                        magazine=pygame.Rect(px+port*10-2,py+7+offset,4,8)
+                        pygame.draw.rect(self.surface,(121,164,186),magazine,border_radius=1)
+            elif actor.motion=='charge' and actor.checked:
+                px,py=self.project(actor.x,actor.y,max(1.1,actor.z))
+                for i in (-1,1):
+                    self.line((141,185,210),[(px+i*24,py+12),(px+i*42,py+28)],2,power=.2)
